@@ -5,5 +5,6 @@ last update:
 - movement fix
 - texture adding (no scaling/following yet)
 - ray casting works
+- wtf image is bugged, gray scale+compressed
 
 ![update](https://github.com/4RE5group/baphomet/assets/71982379/8bfcb341-5f72-4a54-ba2a-7b32e443f23c)
