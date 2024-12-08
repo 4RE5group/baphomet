@@ -4,4 +4,4 @@ make clean
 make
 
 # Run the code
-./fps ./data/map
+./fps ./maps/map

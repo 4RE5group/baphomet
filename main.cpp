@@ -1,221 +1,180 @@
-#include <opencv2/core.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/imgproc.hpp>
+// #include <opencv2/opencv.hpp>
+#include "opencv2/core.hpp"
+#include "opencv2/highgui.hpp"
+#include "opencv2/imgproc.hpp"
 #include <iostream>
+#include <vector>
 #include <cmath>
-#include <chrono>
-#include <thread>
-#include <iostream>
-// sudo apt install libx11-dev
+#include <stdlib.h>
+#include "baphomet.h"
 
 using namespace std;
-using namespace std::this_thread;     // sleep_for, sleep_until
-using namespace std::chrono_literals; // ns, us, ms, s, h, etc.
-using std::chrono::system_clock;
+using namespace cv;
 
-// Constants
-const string window_name = "Graphic Engine";
+const string window_name = "BAPHOMET :: 1.0 - 4re5 group";
 const int WIDTH = 800;
 const int HEIGHT = 600;
+const int LOW_WIDTH = 600;  // Lower width for rendering  -> upscaled later
+const int LOW_HEIGHT = 400; // Lower height for rendering -> upscaled later
+const float focal_length = 1.0;
+const float delta = 1.0f;
+const Vec3b BORDER_COLOR(0, 0, 0);
 
 
-class Point {
-public:
-    float x, y, z;
-    Point(float x, float y, float z) : x(x), y(y), z(z) {}
-    Point() : x(0), y(0), z(0) {}
-};
+// init camera
+Baphomet::Camera camera(Baphomet::Point(0, 0, -10));
 
-class Vector3D {
-public:
-    Point from;
-    Point to;
 
-    Vector3D(Point a, Point b) : from(a), to(b) {}
-
-    Point direction() const {
-        return Point(to.x - from.x, to.y - from.y, to.z - from.z);
-    }
-};
-class Camera {
-public:
-    Point position;
-    float direction_horizontal=0; // 0° = direction x; 180=-x     90 and 270=z and -z 
-    float direction_vertical=0;
-
-    Camera(Point a) : position(a) {}
-
-    void moveForward(float value) {
-        position.x += value;
-    }
-    void moveSide(float value) {
-        position.z += value;
-    }
-    void moveUpward(float value) {
-        position.y += value;
-    }
-    void updateDirection(float vertical_delta, float horizontal_delta) {
-        direction_vertical += vertical_delta;
-        direction_horizontal += horizontal_delta;
-    }
-};
-class Rect {
-public:
-    Point x1, x2, x3, x4;
-    Rect(Point x1, Point x2,  Point x3,  Point x4) : x1(x1), x2(x2), x3(x3), x4(x4) {}
-    Rect() {}
-
-    Point getScreenTopLeftCorner(Camera camera) {
-        // calc shortest ray between a corner
-        float dist_x1 = sqrt(pow(camera.position.x-x1.x, 2)+pow(camera.position.y-x1.y, 2)+pow(camera.position.z-x1.z, 2));
-        float dist_x2 = sqrt(pow(camera.position.x-x2.x, 2)+pow(camera.position.y-x2.y, 2)+pow(camera.position.z-x2.z, 2));
-        float dist_x3 = sqrt(pow(camera.position.x-x3.x, 2)+pow(camera.position.y-x3.y, 2)+pow(camera.position.z-x3.z, 2));
-        float dist_x4 = sqrt(pow(camera.position.x-x4.x, 2)+pow(camera.position.y-x4.y, 2)+pow(camera.position.z-x4.z, 2));
-        if(dist_x1 < dist_x2) {
-            if(dist_x1 < dist_x3) {
-                if(dist_x1 < dist_x4) {
-                    return x1;
-                } else {
-                    return x4;
-                }
-            } else {
-                if(dist_x3 < dist_x4) {
-                    return x3;
-                } else {
-                    return x4;
-                }
-            }
-        } else {
-            if(dist_x2 < dist_x3) {
-                if(dist_x2 < dist_x4) {
-                    return x2;
-                } else {
-                    return x4;
-                }
-            } else {
-                if(dist_x3 < dist_x4) {
-                    return x3;
-                } else {
-                    return x4;
-                }                  
-            }
+Baphomet::Point2d prevMousePos = Baphomet::Point2d(-1, -1);  // Previous mouse position
+void mouseCallback(int event, int x, int y, int, void*) {
+    if (event == EVENT_MOUSEMOVE) {
+        if (prevMousePos.x >= 0 && prevMousePos.y >= 0) {
+            // Calculate the change in mouse position (delta)
+            int dx = x - prevMousePos.x;
+            int dy = y - prevMousePos.y;
+            // Adjust angles based on mouse movement
+            camera.direction_horizontal += dx;  // Horizontal angle change
+            camera.direction_vertical += dy;  // Vertical angle change
+            // Optional: Clamp the vertical angle to a certain range (e.g., -90 to 90 degrees)
+            camera.direction_vertical = max(-90, min(90, camera.direction_vertical));
+            // cout << "Horizontal angle (X): " << camera.direction_horizontal << ", Vertical angle (Y): " << camera.direction_vertical << endl;
         }
+        // Update the previous mouse position
+        prevMousePos = Baphomet::Point2d(x, y);
+    } else if (event == EVENT_LBUTTONUP || event == EVENT_RBUTTONUP) {
+        // Reset previous mouse position when button is released
+        prevMousePos = Baphomet::Point2d(-1, -1);
     }
-};
-class Sphere {
-public:
-    Point center;
-    float radius;
-    Rect rect;
-
-    Sphere(Point center, float radius) : center(center), radius(radius) {
-        rect.x1 = Point(center.x-radius, center.y+radius, center.z-radius);
-        rect.x2 = Point(center.x+radius, center.y+radius, center.z-radius);
-        rect.x3 = Point(center.x-radius, center.y+radius, center.z+radius);
-        rect.x4 = Point(center.x-radius, center.y-radius, center.z-radius);
-    }
+}
 
 
-
-    bool intersects(const Vector3D& ray, float& t) const {
-        Point dir = ray.direction();
-        Point oc = Point(ray.from.x - center.x, ray.from.y - center.y, ray.from.z - center.z);
-
-        float a = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
-        float b = 2.0 * (oc.x * dir.x + oc.y * dir.y + oc.z * dir.z);
-        float c = oc.x * oc.x + oc.y * oc.y + oc.z * oc.z - radius * radius;
-        float discriminant = b * b - 4 * a * c;
-
-        if (discriminant < 0) {
-            return false;
-        } else {
-            t = (-b - sqrt(discriminant)) / (2.0 * a);
-            return true;
-        }
-    }
-};
-
-int main() {
-    const float delta = 0.1f; // Adjust this value for sensitivity
-    const int render_distance = 100;
-
-
-    // init texture test
-    cv::Mat frame = cv::imread("./assets/texture.jpg", cv::IMREAD_ANYDEPTH);
-
-    // Be sure that the image is loaded
-    if (frame.empty())
-    {
-        printf("No image loaded\n");
-        return -1;
+int main(int argc, char* argv[]) {
+    char* mapPath;
+    if(argc >= 2) {
+        mapPath = argv[1];
+    } else {
+        cout << "[x] Usage: " << argv[0] << " <your map path>" << endl;
+        return 1;
     }
 
-    // Be sure that the image is 16bpp and single channel
-    // if (frame.type() != CV_16U || frame.channels() != 1)
-    // {
-    //     printf("Wrong image depth or channels\n");
-    //     return -1;
-    // }
-
-
-    
-    // Initialize camera
-    Camera camera(Point(0, 0, -10));
-
-    vector<Sphere> objects;
-    objects.emplace_back(Point(0, 0, 10), 2);
 
     cv::Mat image(HEIGHT, WIDTH, CV_8UC3);
+    cv::Mat lowResImage(LOW_HEIGHT, LOW_WIDTH, CV_8UC3);
+    cv::resize(lowResImage, image, cv::Size(WIDTH, HEIGHT));
 
-    int a, b;
 
-    while (true) {
 
-        // Render
-        int r, g, b;
-        for (int y = 0; y < HEIGHT; ++y) {
-            for (int x = 0; x < WIDTH; ++x) {
-                Point endPoint(camera.position.x - WIDTH / 2 + x, camera.position.y - HEIGHT / 2 + y, camera.position.z + 1000);
-                Vector3D ray(camera.position, endPoint);
+    // Baphomet::loadMap(mapPath, &camera);
 
-                Rect textureRect;
+    Baphomet::Scene scene;
+    // scene.addObject(new Baphomet::Plane(Baphomet::Point(-5, 0, 0), Baphomet::Point(-5, 0, 1), Vec3b(255, 0, 0))); // Left Wall
+    // scene.addObject(new Baphomet::Plane(Baphomet::Point(5, 0, 0), Baphomet::Point(5, 0, 1), Vec3b(255, 0, 0))); // Right Wall
+    // // Create the floor (horizontal plane)
+    // scene.addObject(new Baphomet::Plane(Baphomet::Point(-5, -1, 0), Baphomet::Point(5, -1, 0), Vec3b(200, 200, 200))); // Floor
+    // // Create the ceiling (horizontal plane)
+    // scene.addObject(new Baphomet::Plane(Baphomet::Point(-5, 1, 0), Baphomet::Point(5, 1, 0), Vec3b(200, 200, 200))); // Ceiling
+    
+    Baphomet::Skybox* skybox = nullptr;
+
+    try {
+        skybox = new Baphomet::Skybox(Baphomet::Point(0.0f, 0.0f, 0.0f), Vec3b(255, 255, 255), 100.0f, "./assets/skybox.jpg");
+    } catch (const std::exception& e) {
+        std::cerr << "Error loading skybox: " << e.what() << std::endl;
+        return 1;
+    }
+
+    scene.addObject(new Baphomet::Cube(Baphomet::Point(0.0f, 1.0f, 5.0f), 2.0f, Vec3b(255, 0, 0))); // Red Cube
+    scene.addObject(new Baphomet::Sphere(Baphomet::Point(2, 2, 5), 1.0f, Vec3b(0, 255, 0))); // Green Sphere
+    scene.addObject(new Baphomet::Plane(Baphomet::Point(-5.0f, 0, -5.0f), Baphomet::Point(5.0f, 0.0f, 0.0f), Baphomet::Point(0, 0, 5.0f), Vec3b(255, 255, 255)));
+    
+    scene.addObject(new Baphomet::Sphere(Baphomet::Point(5.0f, 5.0f, 5.0f), 1.0f, Vec3b(255, 0, 0)));
+    Baphomet::Light light(Baphomet::Point(5.0f, 5.0f, 5.0f), Vec3b(255, 0, 255)); // White light
+    
+    bool debug = false;
+
+    system("clear");
+    cout << Baphomet::Baphomet::banner << endl;
+    cout << window_name << endl;
+    cout << "   >> loaded '" << mapPath << "'" << endl;
+
+    int fov_horizontal = 100;
+    int fov_vertical = 100;
+
+    
+    float u=0;
+    float v=0;
+    while(true) {
+        #pragma omp parallel for
+        for (int y = 0; y < LOW_HEIGHT; ++y) {
+            for (int x = 0; x < LOW_WIDTH; ++x) {
+                u = (x - LOW_WIDTH / 2.0f) / LOW_WIDTH;
+                v = (y - LOW_HEIGHT / 2.0f) / LOW_HEIGHT;
+
+                float h_rad = (camera.direction_horizontal + u * fov_horizontal) * M_PI / 180.0f;
+                float v_rad = (camera.direction_vertical + v * fov_vertical) * M_PI / 180.0f;
+
+                Baphomet::Point direction(
+                    cos(v_rad) * sin(h_rad),
+                    sin(v_rad),
+                    cos(v_rad) * cos(h_rad)
+                );
+
+                direction = Baphomet::normalize(direction);
+                Baphomet::Ray ray(camera.position, direction);
+
+                Vec3b pixelColor(0, 0, 0);
+                float t_min = numeric_limits<float>::max();
+                const Baphomet::Object* hitObject = nullptr;
                 bool hit = false;
-                int distance=5;
-                for (const Sphere& object : objects) {
-                    float t;
-                    if (object.intersects(ray, t)) {
-                        distance=sqrt(pow(camera.position.x-object.center.x, 2)+pow(camera.position.y-object.center.y, 2)+pow(camera.position.z-object.center.z, 2));
-                        textureRect = object.rect;
+
+                for (const auto& object : scene.objects) {
+                    float t = 0;
+                    if (object->rayIntersect(ray, t) && t < t_min) {
                         hit = true;
-                        break;
+                        t_min = t;
+                        hitObject = object;
+                        Baphomet::Point intersectionPoint = ray.origin + t * ray.direction;
+
+                        // Shadow check
+                        if (isInShadow(intersectionPoint, light, scene, hitObject)) {
+                            pixelColor = pixelColor * 0.5; // Dim color to simulate shadow
+                        } else {
+                            pixelColor = object->color; // Object color if lit
+                        }
                     }
                 }
 
                 if (hit) {
-                    // shadow system
-                    Point startCorner = textureRect.getScreenTopLeftCorner(camera);
-                    cv::Vec3b pixel = frame.at<cv::Vec3b>(y-startCorner.y, x-startCorner.x);
-                    float precentage = 1-float(distance)/float(render_distance);
-                    if(precentage <= 1 && precentage >= 0) {
-                        r = trunc(int(pixel[0])*precentage);
-                        g = trunc(int(pixel[1])*precentage);
-                        b = trunc(int(pixel[2])*precentage);
-                        image.at<cv::Vec3b>(cv::Point(x, y)) = cv::Vec3b(r, g, b);; // Black for sphere
-                    }
-                    else {
-                        image.at<cv::Vec3b>(cv::Point(x, y)) = frame.at<cv::Vec3b>(cv::Point(x,y));
-                    }
+                    
                 } else {
-                    image.at<cv::Vec3b>(cv::Point(x, y)) = cv::Vec3b(252, 100, 64); // Sky blue for background
+                    if (skybox) {
+                        // Use skybox color when no object is hit
+                        pixelColor = skybox->getColor(ray);
+                    }
                 }
+                lowResImage.at<Vec3b>(Point(x, LOW_HEIGHT - 1 - y)) = pixelColor;
+                
             }
         }
+        cv::resize(lowResImage, image, cv::Size(WIDTH, HEIGHT));
+        if (debug) {
+            int debug_menu_x = WIDTH - 200;
+            cv::putText(image, "x, y, z", cv::Point(debug_menu_x, 10), cv::FONT_HERSHEY_COMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+            cv::putText(image, Baphomet::toStringWithPrecision(camera.position.x, 2) + ", " + Baphomet::toStringWithPrecision(camera.position.y, 2) + ", " + Baphomet::toStringWithPrecision(camera.position.z, 2), cv::Point(debug_menu_x, 30), cv::FONT_HERSHEY_COMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+            cv::putText(image, "rot: x, y", cv::Point(debug_menu_x, 50), cv::FONT_HERSHEY_COMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+            cv::putText(image, Baphomet::toStringWithPrecision(camera.direction_horizontal, 2) + ", " + Baphomet::toStringWithPrecision(camera.direction_vertical, 2), cv::Point(debug_menu_x, 70), cv::FONT_HERSHEY_COMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+            Baphomet::drawOrientationArrows(image, camera);
+        }
 
-        cv::imshow(window_name, image);
+        
+        imshow(window_name, image);
+        // init callback for movements
+        // setMouseCallback(window_name, mouseCallback);
+        
         int key = cv::waitKey(1);
+        // printf("%d", key);
         if (key != -1) {
-            // Check for specific keys
-            if (key == 27) {  // ESC key
+            if (key == 27) {
                 printf("Finished\n");
                 break;
             } else if (key == 'w') {
@@ -226,19 +185,31 @@ int main() {
                 camera.moveSide(-1);
             } else if (key == 'd') {
                 camera.moveSide(1);
-            }
+            } else if (key == 'h') {
+                debug = !debug;
+            } else if (key == 'l') {
+                cout << "Enter x,y,z of light" << endl;
+                light.position.x-=1;
+            } else if (key == 'r') {
+                camera.position = Baphomet::Point(0, 0, -10);
+                camera.direction_horizontal = 0;
+                camera.direction_vertical = 0;
+            } 
             switch (key) {
-                case 82: // Up arrow key
-                    camera.updateDirection(-delta, 0);
+                case 32: // space
+                    camera.moveUpward(1);
                     break;
-                case 84: // Down arrow key
-                    camera.updateDirection(delta, 0);
+                case 82: 
+                    camera.updateDirection(0, delta);
                     break;
-                case 81: // Left arrow key
+                case 84: 
                     camera.updateDirection(0, -delta);
                     break;
-                case 83: // Right arrow key
-                    camera.updateDirection(0, delta);
+                case 81: 
+                    camera.updateDirection(-delta, 0);
+                    break;
+                case 83: 
+                    camera.updateDirection(delta, 0);
                     break;
                 default:
                     break;
