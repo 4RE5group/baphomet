@@ -7,6 +7,8 @@
 #include <cmath>
 #include <stdlib.h>
 #include "baphomet.h"
+#include <X11/Xlib.h>
+#include <X11/extensions/XTest.h>
 
 using namespace std;
 using namespace cv;
@@ -24,27 +26,44 @@ const Vec3b BORDER_COLOR(0, 0, 0);
 // init camera
 Baphomet::Camera camera(Baphomet::Point(0, 0, -10));
 
+void setMouseCursorPos(int x, int y) {
+    Display* display = XOpenDisplay(nullptr);
+    XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, WIDTH / 2, HEIGHT / 2);
 
-Baphomet::Point2d prevMousePos = Baphomet::Point2d(-1, -1);  // Previous mouse position
+    // if (!display) return;
+    // XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, x, y);
+    XCloseDisplay(display);
+}
+
+bool isCursorLocked = false;            // Lock state
+cv::Point2i centerPoint(WIDTH / 2, HEIGHT / 2); // Center of the screen
+bool firstMove = true;                  // To initialize previous mouse position
 void mouseCallback(int event, int x, int y, int, void*) {
-    if (event == EVENT_MOUSEMOVE) {
-        if (prevMousePos.x >= 0 && prevMousePos.y >= 0) {
-            // Calculate the change in mouse position (delta)
-            int dx = x - prevMousePos.x;
-            int dy = y - prevMousePos.y;
-            // Adjust angles based on mouse movement
-            camera.direction_horizontal += dx;  // Horizontal angle change
-            camera.direction_vertical += dy;  // Vertical angle change
-            // Optional: Clamp the vertical angle to a certain range (e.g., -90 to 90 degrees)
-            camera.direction_vertical = max(-90, min(90, camera.direction_vertical));
-            // cout << "Horizontal angle (X): " << camera.direction_horizontal << ", Vertical angle (Y): " << camera.direction_vertical << endl;
-        }
-        // Update the previous mouse position
-        prevMousePos = Baphomet::Point2d(x, y);
-    } else if (event == EVENT_LBUTTONUP || event == EVENT_RBUTTONUP) {
-        // Reset previous mouse position when button is released
-        prevMousePos = Baphomet::Point2d(-1, -1);
+    if (!isCursorLocked) return;
+
+    static cv::Point2i prevMousePos(centerPoint.x, centerPoint.y);
+
+    if (firstMove) {
+        prevMousePos = cv::Point2i(x, y);
+        firstMove = false;
     }
+
+    // Calculate relative movement
+    int dx = x - prevMousePos.x;
+    int dy = y - prevMousePos.y;
+
+    // Update camera angles based on mouse movement
+    camera.direction_horizontal += dx * 0.1f; // Adjust horizontal sensitivity
+    camera.direction_vertical -= dy * 0.1f;   // Adjust vertical sensitivity
+
+    // Clamp vertical rotation to avoid flipping
+    camera.direction_vertical = std::clamp(camera.direction_vertical, static_cast<int>(-90), static_cast<int>(90));
+
+
+    // Reset mouse position
+    prevMousePos = cv::Point2i(x, y);
+    cv::setMouseCallback(window_name, mouseCallback);
+    setMouseCursorPos(centerPoint.x, centerPoint.y);
 }
 
 
@@ -104,6 +123,9 @@ int main(int argc, char* argv[]) {
     float u=0;
     float v=0;
     while(true) {
+        if (isCursorLocked) {
+            setMouseCursorPos(centerPoint.x, centerPoint.y);
+        }
         #pragma omp parallel for
         for (int y = 0; y < LOW_HEIGHT; ++y) {
             for (int x = 0; x < LOW_WIDTH; ++x) {
@@ -190,6 +212,11 @@ int main(int argc, char* argv[]) {
             } else if (key == 'l') {
                 cout << "Enter x,y,z of light" << endl;
                 light.position.x-=1;
+            } else if(key == 'm') {
+                isCursorLocked = !isCursorLocked;
+                firstMove = true; // Reset for smooth transition
+                cv::setMouseCallback(window_name, isCursorLocked ? mouseCallback : nullptr);
+                cout << (isCursorLocked ? "Cursor Locked" : "Cursor Unlocked") << endl;
             } else if (key == 'r') {
                 camera.position = Baphomet::Point(0, 0, -10);
                 camera.direction_horizontal = 0;
